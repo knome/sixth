@@ -1,7 +1,7 @@
 
 flags =
 opt   = -O2
-warns = -Wall -Wextra -Werror -Wmaybe-uninitialized -Wfatal-errors
+warns = -Wall -Wextra -Werror -Wmaybe-uninitialized -Wfatal-errors -fwhole-program
 
 a.out:
 	python gcgen.py <data/EXAMPLE >bld/OUT.c 

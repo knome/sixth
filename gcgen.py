@@ -249,12 +249,12 @@ zGc__create(
 ){
   uint64_t numSlots = (size - sizeof( struct zGc )) / zSLOT_SIZE ;
   
-  if( numSlots < zMINSLOTS ){
+  if( zUNLIKELY( numSlots < zMINSLOTS ) ){
     zGc__panic( "you cannot specify a gc of fewer than " zSTRINGVALUE( zMINSLOTS ) " SLOTS" );
   }
   
   char * start = mmap( NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0 );
-  if( start == MAP_FAILED ){
+  if( zUNLIKELY( start == MAP_FAILED ) ){
     zGc__panic( "failed to alloc memory for gc : %s", strerror( errno ) );
   }
   
@@ -597,7 +597,7 @@ zGc__new(
       - gc->nextSI.slotIndex
       ;
     
-    if( requiredIndirections + requiredSlots + collectSlots > newAvailableSlots ){
+    if( zUNLIKELY( requiredIndirections + requiredSlots + collectSlots > newAvailableSlots ) ){
       zGc__panic( "could not free sufficient space for requested allocation during gc collection" );
     }
     

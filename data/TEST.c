@@ -29,16 +29,16 @@ int main(
   
   for(
     uint64_t wat = 0    ;
-    wat < 4000000000llu ;
+    wat < 1000000000llu ;
     wat ++
   ){
     struct zII newStringII = zGc__new_SmallString( gc, strlen( "hello world" ), "hello world" );
-    struct zII newII = zGc__new_TinyString1( gc, "a" );
+    // struct zII newII = zGc__new_TinyString1( gc, "a" );
     
-    uint64_t ri = 1 + wat++ % 7 ;
+    // uint64_t ri = 1 + wat++ % 7 ;
     uint64_t si = 10 + wat % 8 ;
     
-    zGc__set( gc, ri, newII );
+    // zGc__set( gc, ri, newII );
     zGc__set( gc, si, newStringII );
   }
   
