@@ -556,14 +556,13 @@ zGc__collect(
             // 
             // !!! TYPESHIFTS increment nextNewSlot from within the type specific inclusions
             // 
-            switch( newIndirectionLocation->objectType.objectType ){
-              $TYPESHIFTS
-              default:
-              zGc__panic(
-                "unknown type while shifting:: %llu\n",
-                (unsigned long long) newIndirectionLocation->objectType.objectType
-              );
-            }  
+            
+            $TYPESHIFTTARGETS
+            
+            goto * typeShiftTargets[ newIndirectionLocation->objectType.objectType ] ;
+            $TYPESHIFTS
+            typeShiftExit:;
+
           }
           
           // update references
@@ -875,25 +874,38 @@ def main():
               )
             )
     
+    typeShiftTargets = []
+    typeShiftTargets.append(
+      'static void * typeShiftTargets [] = { && typeShiftExit '
+    )
+    for typeDefinition in sorted( KNOWN.values(), key = lambda ee : ee['eno'] ):
+        if 'cmove' in typeDefinition:
+            typeShiftTargets.append(
+              ' , && typeShiftTarget_%(name)s ' % typeDefinition
+            )
+        else:
+            typeShiftTargets.append(
+              ' , && typeShiftExit '
+            )
+    typeShiftTargets.append(
+        ' } ; '
+    )
+    
     typeShifts = []
     for typeDefinition in sorted( KNOWN.values(), key = lambda ee : ee['eno'] ):
         if 'cmove' in typeDefinition:
             typeShifts.append(
-                ( 'case %(eno)s: { '
+                ( 'typeShiftTarget_%(name)s: { '
                   '  typedef %(ctype)s type ; '
                   '  type * this = (type *) source ; '
                   '  uint64_t size = %(cmove)s ; '
                   '  memmove( destination, source, size ); '
                   '  nextNewSlot += size / zSLOT_SIZE + (!! (size %% zSLOT_SIZE)); '
+                  '  goto typeShiftExit; '
                   '} '
-                  'break; // %(name)s' 
                 ) % (
                   typeDefinition
                 )
-            )
-        else:
-            typeShifts.append(
-              'case %(eno)s: break; // %(name)s' % typeDefinition
             )
     
     template = TEMPLATE
@@ -902,6 +914,7 @@ def main():
       ('$TYPEENUMERATIONS'  , '\n'.join( typeEnumerations )),
       ('$TYPEWALKTARGETS'   , '\n'.join( typeWalkTargets )),
       ('$TYPEWALKS'         , '\n'.join( typeWalks )),
+      ('$TYPESHIFTTARGETS'  , '\n'.join( typeShiftTargets )),
       ('$TYPESHIFTS'        , '\n'.join( typeShifts )),
       ('$UNIQUETYPES'       , str( len( uniqueTypes ))),
       ('$OBJECTTYPES'       , str( len( KNOWN ))),
