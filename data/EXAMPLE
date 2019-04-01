@@ -1,5 +1,5 @@
 
-@registers : 10
+@registers : 20
 
 # no type indicates a unique type that has no actual backing structure
 # ctype must be able to be followed by the type name, use a struct to wrap inner-name types
