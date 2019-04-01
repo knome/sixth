@@ -61,6 +61,8 @@ TEMPLATE = r"""
 
 #define zSTRING( xx ) #xx
 #define zSTRINGVALUE( xx ) zSTRING( xx )
+#define zPASTE( xx, yy )  xx ## yy
+#define zPASTEVALUE( xx, yy ) zPASTE( xx, yy )
 
 #define zUNLIKELY(x) __builtin_expect((x),0)
 #define zLIKELY(x) __builtin_expect((x),1)
@@ -316,6 +318,80 @@ zLM__marked(
 
 static inline
 void
+zGc__collect__push_registers_to_descent_array(
+  struct zGc * gc                ,
+  struct zII * rewrites          ,
+  uint64_t *   livemap           ,
+  uint64_t *   finalDescentIndex
+){
+  // first preload the descent array with whatevers in the current registers
+  for( uint64_t registerIndex = 0 ; registerIndex < zNUM_REGISTERS ; registerIndex ++ ){
+    if( gc->registers[ registerIndex ].indirectionIndex > zNUM_UNIQUE_TYPES ){
+      rewrites[ (*finalDescentIndex)++ ].indirectionIndex = gc->registers[ registerIndex ].indirectionIndex ;
+      zLM__mark( livemap, gc->registers[ registerIndex ].indirectionIndex );
+    }
+  }
+}
+
+static inline
+void
+zGc__collect__create_livemap(
+  struct zGc * gc                ,
+  struct zII * rewrites          ,
+  uint64_t *   livemap           ,
+  uint64_t *   finalDescentIndex
+){
+  // now we'll descend the current object heirarchy and create the livemap
+  uint64_t currentDescentIndex = 0 ;
+  while( currentDescentIndex < *finalDescentIndex ){
+    struct zIndirection * indirection =
+      zGc__indirection( gc, (struct zII){ .indirectionIndex = rewrites[ currentDescentIndex ].indirectionIndex } )
+      ;
+    
+    // fprintf(
+    //   stderr, 
+    //   "descent/RW[%llu]=II[%llu]=[%p] ot=%llu\n",
+    //   (unsigned long long) currentDescentIndex,
+    //   (unsigned long long) rewrites[ currentDescentIndex ].indirectionIndex,
+    //   indirection ,
+    //   (unsigned long long) indirection->objectType.objectType
+    // );
+    
+    #define yield( ptr ) \
+      do{ \
+        if(! zLM__marked( livemap, (ptr)->indirectionIndex ) ){ \
+          if( (ptr)->indirectionIndex > zNUM_UNIQUE_TYPES ){ \
+            rewrites[ (*finalDescentIndex)++ ].indirectionIndex = (ptr)->indirectionIndex ; \
+            zLM__mark( livemap, (ptr)->indirectionIndex ); \
+          } \
+        } \
+      } while (0)
+    
+    #define zTYPEWALK_PREFIX zSCAN
+    
+    #define zCURRENT_II (currentDescentIndex)
+    
+    // type walk targets
+    // 
+    $TYPEWALKTARGETS
+    
+    // type walks
+    // 
+    goto * zPASTEVALUE( zTYPEWALK_PREFIX, typeWalkTargets )[ indirection->objectType.objectType ];
+    $TYPEWALKS
+    zPASTEVALUE( zTYPEWALK_PREFIX, typeWalkExit ):;
+    
+    #undef zCURRENT_II
+    #undef zTYPEWALK_PREFIX
+    #undef yield
+    
+    currentDescentIndex ++ ;
+  }
+  
+}
+
+static inline
+void
 zGc__collect(
   struct zGc * gc
 ){
@@ -349,7 +425,8 @@ zGc__collect(
   
   // fprintf(
   //   stderr,
-  //   "livemapSlots:%llu rewriteSlots:%llu rewrites(%p-%p) slots(%p-%p) registers(%p-%p) livemap(%p-%p) indirections(%p-%p)\n",
+  //   "livemapSlots:%llu rewriteSlots:%llu "
+  //   "rewrites(%p-%p) slots(%p-%p) registers(%p-%p) livemap(%p-%p) indirections(%p-%p)\n",
   //   (unsigned long long ) livemapSlots,
   //   (unsigned long long ) rewriteSlots,
   //   (struct zII *) & gc->slots[ gc->nextSI.slotIndex + livemapSlots ].as_chardata[0] ,
@@ -374,51 +451,23 @@ zGc__collect(
   // we first use the rewrite array as a stack for live item descent
   // we'll keep track of what's alive in the livemap, which is a big fat bitmap
   
-  // first preload the descent array with whatevers in the current registers
+  // records how many live objects we come across, acts as index into descent array
+  // 
   uint64_t finalDescentIndex = 0 ;
-  for( uint64_t registerIndex = 0 ; registerIndex < zNUM_REGISTERS ; registerIndex ++ ){
-    if( gc->registers[ registerIndex ].indirectionIndex > zNUM_UNIQUE_TYPES ){
-      rewrites[ finalDescentIndex++ ].indirectionIndex = gc->registers[ registerIndex ].indirectionIndex ;
-      zLM__mark( livemap, gc->registers[ registerIndex ].indirectionIndex );
-    }
-  }
   
-  // now we'll descend the current object heirarchy and create the livemap
-  uint64_t currentDescentIndex = 0 ;
-  while( currentDescentIndex < finalDescentIndex ){
-    struct zIndirection * indirection =
-      zGc__indirection( gc, (struct zII){ .indirectionIndex = rewrites[ currentDescentIndex ].indirectionIndex } )
-      ;
-    
-    // fprintf(
-    //   stderr, 
-    //   "descent/RW[%llu]=II[%llu]=[%p] ot=%llu\n",
-    //   (unsigned long long) currentDescentIndex,
-    //   (unsigned long long) rewrites[ currentDescentIndex ].indirectionIndex,
-    //   indirection ,
-    //   (unsigned long long) indirection->objectType.objectType
-    // );
-    
-    #define yield( ptr ) \
-      do{ \
-        if(! zLM__marked( livemap, (ptr)->indirectionIndex ) ){ \
-          if( (ptr)->indirectionIndex > zNUM_UNIQUE_TYPES ){ \
-            rewrites[ finalDescentIndex++ ].indirectionIndex = (ptr)->indirectionIndex ; \
-            zLM__mark( livemap, (ptr)->indirectionIndex ); \
-          } \
-        } \
-      } while (0)
-    
-    switch( indirection->objectType.objectType ){
-      $TYPEWALKS
-      default:
-        zGc__panic ( "unknown type :: %llu", (unsigned long long) indirection->objectType.objectType );
-    }
-    
-    #undef yield
-    
-    currentDescentIndex ++ ;
-  }
+  zGc__collect__push_registers_to_descent_array(
+    gc                  ,
+    rewrites            ,
+    livemap             ,
+    & finalDescentIndex
+  );
+  
+  zGc__collect__create_livemap(
+    gc                  ,
+    rewrites            ,
+    livemap             ,
+    & finalDescentIndex
+  );
   
   // now we need to create to create a rewrite array
   // scan the liveness map and record where to relocate each indirection
@@ -446,7 +495,7 @@ zGc__collect(
       for(
         uint64_t bitIndex = 0 ;
         bitIndex < 64 ;
-        bitIndex ++
+        bitIndex++
       ){
         if( (*livemapChunk) & (1llu << bitIndex) ){
           struct zII sourceII = 
@@ -470,11 +519,9 @@ zGc__collect(
     livemapChunk ++
   ){
     if( *livemapChunk ){
-      for(
-        uint64_t bitIndex = 0 ;
-        bitIndex < 64 ;
-        bitIndex ++
-      ){
+      uint64_t bitIndex = 0 ;
+      while( bitIndex < 64 ){
+        
         if( (*livemapChunk) & (1llu << bitIndex) ){
           
           unsigned calculatedIndex = ( (uint64_t) ( livemapChunk - (uint64_t *) livemap ) * 64 ) + bitIndex ;
@@ -521,23 +568,32 @@ zGc__collect(
           
           // update references
           
+          #define zTYPEWALK_PREFIX zREWRITE
+          
           #define yield( ptr ) \
             do{ \
               (ptr)->indirectionIndex = rewrites[ (ptr)->indirectionIndex ].indirectionIndex ; \
             } while( 0 )
           
-          switch( newIndirectionLocation->objectType.objectType ){
-            $TYPEWALKS
-            default:
-              zGc__panic(
-                "unknown type while rewriting :: %llu\n",
-                (unsigned long long) newIndirectionLocation->objectType.objectType
-              );
-          }
+          #define zCURRENT_II (zGc__ii( gc, newIndirectionLocation ).indirectionIndex)
           
+          // type walk targets
+          // 
+          $TYPEWALKTARGETS
+          
+          // type walks
+          goto * zPASTEVALUE( zTYPEWALK_PREFIX, typeWalkTargets )[ newIndirectionLocation->objectType.objectType ];
+          $TYPEWALKS
+          zPASTEVALUE( zTYPEWALK_PREFIX, typeWalkExit ) :;
+          
+          #undef zCURRENT_II
           #undef yield
+          #undef zTYPEWALK_PREFIX
           
         }
+        
+        bitIndex ++ ;
+        
       }
     }
   }
@@ -718,11 +774,28 @@ def main():
             )
         )
     
+    typeWalkTargets = []
+    typeWalkTargets.append(
+      'static void * zPASTEVALUE( zTYPEWALK_PREFIX, typeWalkTargets ) [] = { && zPASTEVALUE( zTYPEWALK_PREFIX, typeWalkExit ) '
+    )
+    for typeDefinition in sorted( KNOWN.values(), key = lambda ee : ee['eno'] ):
+        if 'cwalk' in typeDefinition:
+            typeWalkTargets.append(
+              ' , && zPASTEVALUE( zTYPEWALK_PREFIX, typeWalkTargets_%(name)s ) ' % typeDefinition
+            )
+        else:
+            typeWalkTargets.append(
+              ' , && zPASTEVALUE( zTYPEWALK_PREFIX, typeWalkExit ) '
+            )
+    typeWalkTargets.append(
+        ' } ; '
+    )
+    
     typeWalks = []
     for typeDefinition in sorted( KNOWN.values(), key = lambda ee : ee['eno'] ):
         if 'cwalk' in typeDefinition:
             typeWalks.append(
-                ( 'case %(eno)s: '
+                ( 'zPASTEVALUE( zTYPEWALK_PREFIX, typeWalkTargets_%(name)s ): '
                   '  do { '
                   '    typedef %(ctype)s type ; '
                   '    type * this = '
@@ -730,18 +803,14 @@ def main():
                   '        gc, '
                   '        (struct zII){ '
                   '          .indirectionIndex = '
-                  '            rewrites[ currentDescentIndex ].indirectionIndex '
+                  '            rewrites[ zCURRENT_II ].indirectionIndex '
                   '        } '
                   '      ) '
                   '    ; '
                   '    { %(cwalk)s } '
                   '  } while(0) ; '
-                  ' break; // %(name)s '
+                  ' goto zPASTEVALUE( zTYPEWALK_PREFIX, typeWalkExit ) ; // %(name)s '
                 ) % typeDefinition
-            )
-        else:
-            typeWalks.append(
-                'case %(eno)s: break ; // %(name)s' % typeDefinition
             )
     
     typeDefinitions = []
@@ -831,6 +900,7 @@ def main():
     for name, replacement in [
       ('$NUMREGISTERS'      , str( numRegisters )) ,
       ('$TYPEENUMERATIONS'  , '\n'.join( typeEnumerations )),
+      ('$TYPEWALKTARGETS'   , '\n'.join( typeWalkTargets )),
       ('$TYPEWALKS'         , '\n'.join( typeWalks )),
       ('$TYPESHIFTS'        , '\n'.join( typeShifts )),
       ('$UNIQUETYPES'       , str( len( uniqueTypes ))),
