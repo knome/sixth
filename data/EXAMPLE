@@ -1,0 +1,50 @@
+
+@registers : 10
+
+# no type indicates a unique type that has no actual backing structure
+# ctype must be able to be followed by the type name, use a struct to wrap inner-name types
+# anything storing II's must have a cwalk that calls a function named step on each
+# cargs is required for anything with a cinit or csize
+
+name  : Null
+name  : True
+name  : False
+name  : Mu
+
+name  : TinyString1
+ctype : struct { char data [1] ; }
+cargs : char * data
+cinit : this->data[0] = data[0] ;
+
+name  : TinyString2
+ctype : struct { char data [2] ; }
+cargs : char * data
+cinit : memcpy( this->data, data, 2 );
+
+name  : TinyString3
+ctype : struct { char data [3] ; }
+cargs : char * data
+cinit : memcpy( this->data, data, 3 );
+
+name  : TinyString4
+ctype : struct { char data [4] ; }
+cargs : char * data
+cinit : memcpy( this->data, data, 4 );
+
+name  : SmallString
+ctype : struct { uint8_t size ; char data[] ;}
+cargs : uint8_t size, char * data
+csize : sizeof( type ) + size
+cmove : sizeof( type ) + this->size
+cinit : this->size = size ; memcpy( this->data, data, size );
+
+name  : String
+ctype : struct { uint64_t size ; char data [] ; }
+cargs : uint64_t size, char * data
+csize : sizeof( type ) + size
+cmove : sizeof( type ) + this->size
+cinit : this->size = size ; memcpy( this->data, data, size );
+
+name  : Cons
+ctype : struct { struct zII car ; struct zII cdr ;}
+cwalk : { yield( &this->car ) ; yield( &this->cdr ) ;}
