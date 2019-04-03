@@ -131,7 +131,15 @@ struct zGc {
   struct zII  nextII                       ; // what is the index of the next indirection available to the gc?
   struct zSI  nextSI                       ; // what is the index of the next slot available to the gc?
   struct zII  registers [ zNUM_REGISTERS ] ; // root set
-  union zSlot slots     []                 ; // gc'd data
+  
+  uint64_t collections       ;
+  uint64_t allocations       ;
+  uint64_t indirectionShifts ;
+  uint64_t referenceRewrites ;
+  uint64_t slotShifts        ;
+  uint64_t finalizers        ;
+  
+  union zSlot slots [] ; // gc'd data
 };
 
 static inline
@@ -245,6 +253,23 @@ zGc__stats(
   fprintf( stderr, "zgc::slots  = %" PRIu64 "\n", gc->numSlots ) ;
   fprintf( stderr, "zgc::nextII = II[%" PRIu32 "]\n", gc->nextII.indirectionIndex );
   fprintf( stderr, "zgc::nextSI = SI[%" PRIu32 "]\n", gc->nextSI.slotIndex );
+  fprintf( stderr, "\n" );
+  
+  fprintf( stderr, "zgc::collections       = %" PRIu64 "\n", gc->collections       );
+  fprintf( stderr, "zgc::allocations       = %" PRIu64 "\n", gc->allocations       );
+  fprintf( stderr, "zgc::indirectionShifts = %" PRIu64 "\n", gc->indirectionShifts );
+  fprintf( stderr, "zgc::referenceRewrites = %" PRIu64 "\n", gc->referenceRewrites );
+  fprintf( stderr, "zgc::slotShifts        = %" PRIu64 "\n", gc->slotShifts        );
+  fprintf( stderr, "zgc::finalizers        = %" PRIu64 "\n", gc->finalizers        );
+  
+  fprintf( stderr, "\n" );
+}
+
+static inline
+void
+zGc__registers(
+  struct zGc * gc
+){
   fprintf( stderr, "zgc::registers (%" PRIu32 ")\n", (uint32_t)zNUM_REGISTERS );
   for( uint64_t rn = 0 ; rn < zNUM_REGISTERS ; rn++ ){
     fprintf( stderr, "  [%" PRIu64 "] :: II[%" PRIu32 "]\n", rn, zGc__get( gc, rn ).indirectionIndex );
@@ -272,6 +297,13 @@ zGc__create(
   gc->numSlots = numSlots ;
   gc->nextII   = (struct zII) { .indirectionIndex = zNUM_UNIQUE_TYPES + 1 }; // 0 reserved for builtin zRESERVED_NULL
   gc->nextSI   = (struct zSI) { .slotIndex = 0 } ;
+  
+  gc->collections       = 0 ;
+  gc->allocations       = 0 ;
+  gc->indirectionShifts = 0 ;
+  gc->referenceRewrites = 0 ;
+  gc->slotShifts        = 0 ;
+  gc->finalizers        = 0 ;
   
   for( uint64_t index = 0; index < (zNUM_UNIQUE_TYPES + 1) ; index ++ ){
     struct zIndirection * indirection = zGc__indirection( gc, (struct zII){ .indirectionIndex = index });
@@ -460,6 +492,7 @@ zGc__collect(
   // puts("");
   // puts("pre-collect");
   // zGc__stats( gc );
+  // zGc__registers( gc );
   // zGc__dump( gc );
   
   uint64_t livemapSlots = zGc__slots_needed_for_collection_livemaps( gc, gc->nextII.indirectionIndex );
@@ -558,6 +591,10 @@ zGc__collect(
   
   // now we have our rewrite table, we need to shift everything and rewrite their references
   
+  uint64_t indirectionShifts = 0 ;
+  uint64_t slotShifts        = 0 ;
+  uint64_t referenceRewrites = 0 ;
+  
   uint64_t nextNewSlot = 0 ;
   for(
     uint64_t * livemapChunk = (uint64_t *) livemap ;
@@ -595,7 +632,10 @@ zGc__collect(
           //   (unsigned long long) oldIndirectionLocation->objectType.objectType
           // );
           
-          * newIndirectionLocation = * oldIndirectionLocation ;
+          if( newIndirectionLocation != oldIndirectionLocation ){
+            * newIndirectionLocation = * oldIndirectionLocation ;
+            indirectionShifts ++ ;
+          }
           
           // move slotdata
           
@@ -609,6 +649,7 @@ zGc__collect(
             
             // 
             // !!! TYPESHIFTS increment nextNewSlot from within the type specific inclusions
+            // !!! TYPESHIFTS increment slotShifts from within type specific inclusions
             // 
             
             $TYPESHIFTTARGETS
@@ -626,6 +667,7 @@ zGc__collect(
           #define yield( ptr ) \
             do{ \
               (ptr)->indirectionIndex = rewrites[ (ptr)->indirectionIndex ].indirectionIndex ; \
+              referenceRewrites ++ ; \
             } while( 0 )
           
           #define zCURRENT_II (zGc__ii( gc, newIndirectionLocation ).indirectionIndex)
@@ -664,12 +706,19 @@ zGc__collect(
     }
   }
   
+  gc->indirectionShifts += indirectionShifts ;
+  gc->slotShifts        += slotShifts        ;
+  gc->referenceRewrites += referenceRewrites ;
+  
   gc->nextII.indirectionIndex = finalDescentIndex + zNUM_UNIQUE_TYPES + 1 ;
   gc->nextSI.slotIndex        = nextNewSlot ;
+  
+  gc->collections ++ ;
   
   // puts("");
   // puts("post-collect");
   // zGc__stats( gc );
+  // zGc__registers( gc );
   // zGc__dump( gc );
 }
 
@@ -733,6 +782,8 @@ zGc__new(
     indirection->as_slotIndex = gc->nextSI ;
     gc->nextSI.slotIndex += requiredSlots ;
   }
+  
+  gc->allocations ++ ;
   
   return newII ;
 }
@@ -978,6 +1029,7 @@ def main():
                   '  uint64_t size = %(cmove)s ; '
                   '  memmove( destination, source, size ); '
                   '  nextNewSlot += size / zSLOT_SIZE + (!! (size %% zSLOT_SIZE)); '
+                  '  slotShifts ++ ; '
                   '  goto typeShiftExit; '
                   '} '
                 ) % (
