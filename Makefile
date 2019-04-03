@@ -1,5 +1,6 @@
 
-flags =
+# -g
+flags = 
 opt   = -O2
 warns = -Wall -Wextra -Werror -Wmaybe-uninitialized -Wfatal-errors -fwhole-program
 

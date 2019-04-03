@@ -49,7 +49,7 @@ TEMPLATE = r"""
 // abort on panic vs mere exit
 #define zABORT 0
 
-#define zMINSLOTS         1024
+#define zMINSLOTS         5
 #define zNUM_REGISTERS    $NUMREGISTERS
 #define zNUM_UNIQUE_TYPES $UNIQUETYPES
 #define zNUM_OBJECT_TYPES $OBJECTTYPES
@@ -84,8 +84,15 @@ struct zLM { uint64_t index ; };
 static const struct zII zRESERVED_NULL = (struct zII){ .indirectionIndex = 0 } ;
 $UNIQUERESERVATIONS
 
-#define zTYPE_NULL ((struct zOT){ .objectType = 0 })
+// object type literals
+// 
+#define zOT_NULL ((struct zOT){ .objectType = 0 })
 $TYPEENUMERATIONS
+
+// typedefs
+// 
+$TYPEDEFS
+
 
 struct zIndirection {
   struct zOT objectType ;
@@ -266,7 +273,7 @@ zGc__create(
   gc->nextII   = (struct zII) { .indirectionIndex = zNUM_UNIQUE_TYPES + 1 }; // 0 reserved for builtin zRESERVED_NULL
   gc->nextSI   = (struct zSI) { .slotIndex = 0 } ;
   
-  for( uint64_t index = 0; index < zNUM_UNIQUE_TYPES ; index ++ ){
+  for( uint64_t index = 0; index < (zNUM_UNIQUE_TYPES + 1) ; index ++ ){
     struct zIndirection * indirection = zGc__indirection( gc, (struct zII){ .indirectionIndex = index });
     indirection->objectType.objectType = index ;
   }
@@ -279,7 +286,7 @@ zGc__create(
 }
 
 static inline
-char *
+void *
 zGc__data(
   struct zGc * gc ,
   struct zII   ii
@@ -301,7 +308,12 @@ zLM__mark(
   uint64_t chunkIndex = index / 64 ;
   uint64_t bitIndex   = index % 64 ;
   
-  lm[ chunkIndex ] |= (uint64_t) ( 1u << bitIndex ) ;
+  // fprintf( stderr, "__mark %llu %llu\n", (unsigned long long) chunkIndex, (unsigned long long) bitIndex );
+  // fprintf( stderr, "  pre:%llx\n", (unsigned long long) lm[ chunkIndex ] );
+  
+  lm[ chunkIndex ] |= (uint64_t) ( 1llu << bitIndex ) ;
+  
+  // fprintf( stderr, "  pst:%llx\n", (unsigned long long) lm[ chunkIndex ] );
 }
 
 static inline
@@ -313,7 +325,36 @@ zLM__marked(
   uint64_t chunkIndex = index / 64 ;
   uint64_t bitIndex   = index % 64 ;
   
-  return ( lm[ chunkIndex ] & (uint64_t) ( 1u << bitIndex ) );
+  // fprintf( stderr, "__marked %llu %llu\n", (unsigned long long) chunkIndex, (unsigned long long) bitIndex );
+  // fprintf( stderr, "  is :%llx\n", (unsigned long long) lm[ chunkIndex ] );
+  
+  return !! ( lm[ chunkIndex ] & (uint64_t) ( 1llu << bitIndex ) );
+}
+
+static inline
+void
+zGc__dump(
+  struct zGc * gc
+){
+  for( uint64_t jj = 0; jj < gc->nextII.indirectionIndex; jj++ ){
+    fprintf(
+      stderr, 
+      "II[%llu] OT[%llu]\n",
+      (unsigned long long) jj,
+      (unsigned long long) zGc__indirection( gc, (struct zII){ .indirectionIndex = jj } )->objectType.objectType
+    );
+  }
+}
+
+static inline
+void
+zGc__collect__mark_reserved_in_livemap(
+  uint64_t * livemap
+){
+  // first mark all the reserved objects as live
+  for( uint64_t jj = 0; jj < zNUM_UNIQUE_TYPES + 1; jj++ ){
+    zLM__mark( livemap, jj );
+  }
 }
 
 static inline
@@ -326,7 +367,7 @@ zGc__collect__push_registers_to_descent_array(
 ){
   // first preload the descent array with whatevers in the current registers
   for( uint64_t registerIndex = 0 ; registerIndex < zNUM_REGISTERS ; registerIndex ++ ){
-    if( gc->registers[ registerIndex ].indirectionIndex > zNUM_UNIQUE_TYPES ){
+    if( ! zLM__marked( livemap, gc->registers[ registerIndex ].indirectionIndex ) ){
       rewrites[ (*finalDescentIndex)++ ].indirectionIndex = gc->registers[ registerIndex ].indirectionIndex ;
       zLM__mark( livemap, gc->registers[ registerIndex ].indirectionIndex );
     }
@@ -416,9 +457,10 @@ zGc__collect(
   
   // rewrite registers
   
-  puts("");
-  puts("pre-collect");
-  zGc__stats( gc );
+  // puts("");
+  // puts("pre-collect");
+  // zGc__stats( gc );
+  // zGc__dump( gc );
   
   uint64_t livemapSlots = zGc__slots_needed_for_collection_livemaps( gc, gc->nextII.indirectionIndex );
   uint64_t rewriteSlots = zGc__slots_needed_for_collection_rewrites( gc, gc->nextII.indirectionIndex );
@@ -455,6 +497,10 @@ zGc__collect(
   // 
   uint64_t finalDescentIndex = 0 ;
   
+  zGc__collect__mark_reserved_in_livemap(
+    livemap
+  );
+  
   zGc__collect__push_registers_to_descent_array(
     gc                  ,
     rewrites            ,
@@ -485,7 +531,7 @@ zGc__collect(
     + !! ( gc->nextII.indirectionIndex % 64 )
     ;
   
-  uint64_t nextNewII = zNUM_UNIQUE_TYPES + 1 ;
+  uint64_t nextNewII = 0 ;
   for(
     uint64_t * livemapChunk = (uint64_t *) livemap ;
     (uint64_t) ( livemapChunk - (uint64_t *) livemap ) < numLivemapChunks ;
@@ -540,6 +586,14 @@ zGc__collect(
           
           struct zIndirection * oldIndirectionLocation =
             zGc__indirection( gc, sourceII ) ;
+          
+          // fprintf(
+          //   stderr,
+          //   "shifting %llu -> %llu ( %llu->objectType )\n" ,
+          //   (unsigned long long) zGc__ii( gc, oldIndirectionLocation ).indirectionIndex ,
+          //   (unsigned long long) zGc__ii( gc, newIndirectionLocation ).indirectionIndex ,
+          //   (unsigned long long) oldIndirectionLocation->objectType.objectType
+          // );
           
           * newIndirectionLocation = * oldIndirectionLocation ;
           
@@ -613,9 +667,10 @@ zGc__collect(
   gc->nextII.indirectionIndex = finalDescentIndex + zNUM_UNIQUE_TYPES + 1 ;
   gc->nextSI.slotIndex        = nextNewSlot ;
   
-  puts("");
-  puts("post-collect");
-  zGc__stats( gc );
+  // puts("");
+  // puts("post-collect");
+  // zGc__stats( gc );
+  // zGc__dump( gc );
 }
 
 static inline
@@ -642,6 +697,13 @@ zGc__new(
     ;
   
   uint64_t collectSlots = zGc__slots_needed_for_collection( gc, 1 + gc->nextII.indirectionIndex );
+  
+  // fprintf(
+  //   stderr,
+  //   "availableSlots : %llu requiredSlots : %llu\n",
+  //   (unsigned long long) availableSlots,
+  //   (unsigned long long) (requiredIndirections + requiredSlots + collectSlots )
+  // );
   
   if( requiredIndirections + requiredSlots + collectSlots > availableSlots ){
     zGc__collect( gc );
@@ -768,10 +830,17 @@ def main():
             nextEno += 1
         
         typeEnumerations.append(
-            '#define zTYPE_%(name)s ((struct zOT) { .objectType = %(eno)s })' % (
+            '#define zOT_%(name)s ((struct zOT) { .objectType = %(eno)s })' % (
                 typeDefinition
             )
         )
+    
+    typedefs = []
+    for typeDefinition in sorted( KNOWN.values(), key = lambda ee : ee['eno'] ):
+        if 'ctype' in typeDefinition:
+            typedefs.append(
+                'typedef %(ctype)s zTYPE_%(name)s ; ' % typeDefinition
+            )
     
     typeWalkTargets = []
     typeWalkTargets.append(
@@ -796,7 +865,15 @@ def main():
             typeWalks.append(
                 ( 'zPASTEVALUE( zTYPEWALK_PREFIX, typeWalkTargets_%(name)s ): '
                   '  do { '
-                  '    typedef %(ctype)s type ; '
+                  '    typedef zTYPE_%(name)s type ; '
+                  # '    fprintf( stderr, '
+                  # '      "II[%%llu]@%%p\\n", '
+                  # '       (unsigned long long) (zCURRENT_II), '
+                  # '       zGc__indirection( gc, (struct zII){ .indirectionIndex = zCURRENT_II }) '
+                  # '    ); '
+                  # '    fprintf( stderr, "RW[%%llu]\\n", '
+                  # '      (unsigned long long) (rewrites[ zCURRENT_II ].indirectionIndex) '
+                  # '    ); '
                   '    type * this = '
                   '      (type *) zGc__data( '
                   '        gc, '
@@ -861,9 +938,9 @@ def main():
             typeDefinitions.append(
               (
                 'struct zII zGc__new_%(name)s ( struct zGc * gc %(cargs)s ) { \n'
-                '  typedef %(ctype)s type ;\n'
+                '  typedef zTYPE_%(name)s type ;\n'
                 '  size_t requiredSpace = %(csize)s ;\n'
-                '  struct zII new = zGc__new( gc, zTYPE_%(name)s, requiredSpace );\n'
+                '  struct zII new = zGc__new( gc, zOT_%(name)s, requiredSpace );\n'
                 '  type * this = (type *) zGc__data( gc, new ); \n'
                 '  zUNUSED( this ) ; // allow ignoring this in cinit \n'
                 '  { %(cinit)s } \n'
@@ -896,7 +973,7 @@ def main():
         if 'cmove' in typeDefinition:
             typeShifts.append(
                 ( 'typeShiftTarget_%(name)s: { '
-                  '  typedef %(ctype)s type ; '
+                  '  typedef zTYPE_%(name)s type ; '
                   '  type * this = (type *) source ; '
                   '  uint64_t size = %(cmove)s ; '
                   '  memmove( destination, source, size ); '
@@ -910,7 +987,8 @@ def main():
     
     template = TEMPLATE
     for name, replacement in [
-      ('$NUMREGISTERS'      , str( numRegisters )) ,
+      ('$NUMREGISTERS'      , str( numRegisters )),
+      ('$TYPEDEFS'          , '\n'.join( typedefs ) ),
       ('$TYPEENUMERATIONS'  , '\n'.join( typeEnumerations )),
       ('$TYPEWALKTARGETS'   , '\n'.join( typeWalkTargets )),
       ('$TYPEWALKS'         , '\n'.join( typeWalks )),

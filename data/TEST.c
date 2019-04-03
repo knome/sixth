@@ -32,14 +32,23 @@ int main(
     wat < 1000000000llu ;
     wat ++
   ){
-    struct zII newStringII = zGc__new_SmallString( gc, strlen( "hello world" ), "hello world" );
+    // struct zII newStringII = zGc__new_SmallString( gc, strlen( "hello world" ), "hello world" );
     // struct zII newII = zGc__new_TinyString1( gc, "a" );
-    
     // uint64_t ri = 1 + wat++ % 7 ;
-    uint64_t si = 10 + wat % 8 ;
-    
+    // uint64_t si = 10 + wat % 8 ;
     // zGc__set( gc, ri, newII );
-    zGc__set( gc, si, newStringII );
+    // zGc__set( gc, si, newStringII );
+    
+    struct zII newConsII = zGc__new_Cons( gc );
+    zTYPE_Cons * cons = zGc__data( gc, newConsII );
+    
+    uint64_t ri    = wat % 20 ;
+    uint64_t riOff = ( wat + 10 ) % 20 ;
+    
+    cons->car = zGc__get( gc, riOff );
+    cons->cdr = zGc__get( gc, riOff );
+    
+    zGc__set( gc, ri, newConsII );
   }
   
   return 0 ;
