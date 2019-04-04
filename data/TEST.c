@@ -1,8 +1,6 @@
 
 #include <stdio.h>
 
-void bump( void ){ fprintf( stderr, "\n" ); }
-
 int main(
   int argc     ,
   char ** argv 
@@ -19,21 +17,20 @@ int main(
   printf( "successfully allocated gc!\n" );
   
   zGc__stats( gc );
-  bump();
-  
-  zGc__set( gc, 0, zRESERVED_NULL );
-  
-  zGc__set( gc, 9, zRESERVED_Mu );
-  
-  zGc__stats( gc );
   
   for(
     uint64_t wat = 0    ;
     wat < 1000000000llu ;
     wat ++
   ){
-    struct zII newStringII = zGc__new_SmallString( gc, strlen( "hello world" ), "hello world" );
-    zGc__set( gc, wat % 200000, newStringII );
+    // char * ss = 
+    //   "this is a test, this is only a test."
+    //   " if this were an actual emergency,"
+    //   " you'd be getting fired out of a cannon towards a space station by now. This is only a test" 
+    // ;
+    // struct zII newStringII = zGc__new_SmallString( gc, strlen( ss ), ss );
+    // (void) newStringII ;
+    // zGc__set( gc, wat % 200000, newStringII );
     
     // struct zII newII = zGc__new_TinyString1( gc, "a" );
     // uint64_t ri = 1 + wat++ % 7 ;
@@ -52,6 +49,8 @@ int main(
     // 
     // zGc__set( gc, ri, newConsII );
     // zGc__set( gc, (ri + 1) % 20, zRESERVED_NULL );
+    
+    zGc__new_uint64( gc );
   }
   
   fprintf( stderr, "done\n" );

@@ -1,4 +1,5 @@
 
+@slotSize  : 16
 @registers : 200000
 
 # no type indicates a unique type that has no actual backing structure
@@ -10,6 +11,11 @@ name  : Null
 name  : True
 name  : False
 name  : Mu
+
+name  : uint64
+ctype : uint64_t
+cinit : * this = 0 ;
+cwalk : (*this)++;
 
 name  : TinyString1
 ctype : struct { char data [1] ; }

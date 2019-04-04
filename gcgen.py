@@ -132,12 +132,15 @@ struct zGc {
   struct zSI  nextSI                       ; // what is the index of the next slot available to the gc?
   struct zII  registers [ zNUM_REGISTERS ] ; // root set
   
-  uint64_t collections       ;
-  uint64_t allocations       ;
-  uint64_t indirectionShifts ;
-  uint64_t referenceRewrites ;
-  uint64_t slotShifts        ;
-  uint64_t finalizers        ;
+  uint64_t collections           ;
+  uint64_t allocations           ;
+  uint64_t bytesAllocated        ;
+  uint64_t indirectionsAllocated ;
+  uint64_t slotsAllocated        ;
+  uint64_t indirectionShifts     ;
+  uint64_t referenceRewrites     ;
+  uint64_t slotShifts            ;
+  uint64_t finalizers            ;
   
   union zSlot slots [] ; // gc'd data
 };
@@ -255,12 +258,16 @@ zGc__stats(
   fprintf( stderr, "zgc::nextSI = SI[%" PRIu32 "]\n", gc->nextSI.slotIndex );
   fprintf( stderr, "\n" );
   
-  fprintf( stderr, "zgc::collections       = %" PRIu64 "\n", gc->collections       );
-  fprintf( stderr, "zgc::allocations       = %" PRIu64 "\n", gc->allocations       );
-  fprintf( stderr, "zgc::indirectionShifts = %" PRIu64 "\n", gc->indirectionShifts );
-  fprintf( stderr, "zgc::referenceRewrites = %" PRIu64 "\n", gc->referenceRewrites );
-  fprintf( stderr, "zgc::slotShifts        = %" PRIu64 "\n", gc->slotShifts        );
-  fprintf( stderr, "zgc::finalizers        = %" PRIu64 "\n", gc->finalizers        );
+  fprintf( stderr, "zgc::collections           = %" PRIu64 "\n", gc->collections           );
+  fprintf( stderr, "zgc::allocations           = %" PRIu64 "\n", gc->allocations           );
+  fprintf( stderr, "zgc::bytesAllocated        = %" PRIu64 "\n", gc->bytesAllocated        );
+  fprintf( stderr, "zgc::indirectionsAllocated = %" PRIu64 "\n", gc->indirectionsAllocated );
+  fprintf( stderr, "zgc::slotsAllocated        = %" PRIu64 "\n", gc->slotsAllocated        );
+  
+  fprintf( stderr, "zgc::indirectionShifts     = %" PRIu64 "\n", gc->indirectionShifts     );
+  fprintf( stderr, "zgc::referenceRewrites     = %" PRIu64 "\n", gc->referenceRewrites     );
+  fprintf( stderr, "zgc::slotShifts            = %" PRIu64 "\n", gc->slotShifts            );
+  fprintf( stderr, "zgc::finalizers            = %" PRIu64 "\n", gc->finalizers            );
   
   fprintf( stderr, "\n" );
 }
@@ -298,12 +305,15 @@ zGc__create(
   gc->nextII   = (struct zII) { .indirectionIndex = zNUM_UNIQUE_TYPES + 1 }; // 0 reserved for builtin zRESERVED_NULL
   gc->nextSI   = (struct zSI) { .slotIndex = 0 } ;
   
-  gc->collections       = 0 ;
-  gc->allocations       = 0 ;
-  gc->indirectionShifts = 0 ;
-  gc->referenceRewrites = 0 ;
-  gc->slotShifts        = 0 ;
-  gc->finalizers        = 0 ;
+  gc->collections           = 0 ;
+  gc->allocations           = 0 ;
+  gc->bytesAllocated        = 0 ;
+  gc->indirectionsAllocated = 0 ;
+  gc->slotsAllocated        = 0 ;
+  gc->indirectionShifts     = 0 ;
+  gc->referenceRewrites     = 0 ;
+  gc->slotShifts            = 0 ;
+  gc->finalizers            = 0 ;
   
   for( uint64_t index = 0; index < (zNUM_UNIQUE_TYPES + 1) ; index ++ ){
     struct zIndirection * indirection = zGc__indirection( gc, (struct zII){ .indirectionIndex = index });
@@ -739,6 +749,8 @@ zGc__new(
     : (requiredSpace / zSLOT_SIZE + ( !! (requiredSpace % zSLOT_SIZE) ) )
     ;
   
+  gc->bytesAllocated += requiredSpace ;
+  
   uint64_t availableSlots =
     gc->numSlots
     - gc->nextII.indirectionIndex
@@ -776,11 +788,14 @@ zGc__new(
   indirection->objectType = objectType ;
   indirection->immediate  = isImmediate ;
   
+  gc->indirectionsAllocated += 1 ;
+  
   if( isImmediate ){
     memset( indirection->as_immediateData, 0, sizeof( indirection->as_immediateData ) );
   } else {
     indirection->as_slotIndex = gc->nextSI ;
     gc->nextSI.slotIndex += requiredSlots ;
+    gc->slotsAllocated += requiredSlots ;
   }
   
   gc->allocations ++ ;
@@ -934,6 +949,7 @@ def main():
                   '        } '
                   '      ) '
                   '    ; '
+                  '    (void) this ; '
                   '    { %(cwalk)s } '
                   '  } while(0) ; '
                   ' goto zPASTEVALUE( zTYPEWALK_PREFIX, typeWalkExit ) ; // %(name)s '
