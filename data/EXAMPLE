@@ -1,6 +1,6 @@
 
-@slotSize  : 16
-@registers : 200000
+@slotSize  : 8
+@registers : 20
 
 # no type indicates a unique type that has no actual backing structure
 # ctype must be able to be followed by the type name, use a struct to wrap inner-name types
@@ -11,6 +11,11 @@ name  : Null
 name  : True
 name  : False
 name  : Mu
+
+name  : fixed64
+ctype : uint64_t *
+cinit : * this = malloc( sizeof( *this ) ); if( zUNLIKELY( ! *this )){ zGc__panic( "oh god what" ); } ** this = 0 ;
+cfree : free( *this );
 
 name  : uint64
 ctype : uint64_t
@@ -54,3 +59,8 @@ cinit : this->size = size ; memcpy( this->data, data, size );
 name  : Cons
 ctype : struct { struct zII car ; struct zII cdr ;}
 cwalk : { yield( &this->car ) ; yield( &this->cdr ) ;}
+
+name  : Noise
+ctype : int
+cinit : * this = 0 ;
+cfree : {}

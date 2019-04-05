@@ -18,9 +18,15 @@ int main(
   
   zGc__stats( gc );
   
+  // char * data = malloc( 500000 );
+  // if( ! data ){
+  //   puts( "nope" );
+  //   exit(1);
+  // }
+  
   for(
     uint64_t wat = 0    ;
-    wat < 1000000000llu ;
+    wat < 10llu ;
     wat ++
   ){
     // char * ss = 
@@ -29,8 +35,9 @@ int main(
     //   " you'd be getting fired out of a cannon towards a space station by now. This is only a test" 
     // ;
     // struct zII newStringII = zGc__new_SmallString( gc, strlen( ss ), ss );
+    // struct zII newStringII = zGc__new_String( gc, 500000, data );
     // (void) newStringII ;
-    // zGc__set( gc, wat % 200000, newStringII );
+    // zGc__set( gc, wat % 4, newStringII );
     
     // struct zII newII = zGc__new_TinyString1( gc, "a" );
     // uint64_t ri = 1 + wat++ % 7 ;
@@ -50,7 +57,12 @@ int main(
     // zGc__set( gc, ri, newConsII );
     // zGc__set( gc, (ri + 1) % 20, zRESERVED_NULL );
     
-    zGc__new_uint64( gc );
+    for( uint64_t jj = 0; jj < 100000000; jj++ ){
+      zGc__new_Noise( gc );
+    }
+    
+    zGc__collect( gc );
+    
   }
   
   fprintf( stderr, "done\n" );
