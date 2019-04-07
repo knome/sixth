@@ -143,6 +143,10 @@ z__static_assertions(
 
 struct zGc {
   uint64_t    numSlots                     ; // how many total slots are available to the gc?
+  
+  uint64_t    remainingSlots               ; // number of slots left available to use
+  uint64_t    collectionSlots              ; // number of slots needed to perform a collection
+  
   struct zII  nextII                       ; // what is the index of the next indirection available to the gc?
   struct zSI  nextSI                       ; // what is the index of the next slot available to the gc?
   struct zII  registers [ zNUM_REGISTERS ] ; // root set
@@ -201,6 +205,14 @@ zGc__finalmap(
   // 
   uint64_t slotIndex = gc->numSlots - 1 - finalmapIndex ;
   
+  zGc__warn(
+    "finalmap ii:%llu chunk:%llu index:%llu slot:%llu",
+    (unsigned long long) ii.indirectionIndex ,
+    (unsigned long long) chunkIndex          ,
+    (unsigned long long) finalmapIndex       ,
+    (unsigned long long) slotIndex
+  );
+  
   return & gc->slots[ slotIndex ].as_finalmapChunk ;
 }
 
@@ -210,6 +222,7 @@ zGc__finalmap__zero(
   struct zGc * gc ,
   struct zII   ii
 ){
+  zGc__warn( "zeroing" );
   * zGc__finalmap( gc, ii ) = 0 ;
 }
 
@@ -219,6 +232,7 @@ zGc__finalmap__any_in_same_chunk(
    struct zGc * gc ,
    struct zII   ii
 ){
+  zGc__warn( "checking finalmap chunk" );
   return !! * zGc__finalmap( gc, ii ) ;
 }
 
@@ -230,6 +244,10 @@ zGc__finalmap__mark(
 ){
   uint64_t bitIndex = ii.indirectionIndex % 64 ;
   
+  zGc__warn(
+    "marking ii:%llu bitIndex:%llu\n", (unsigned long long) ii.indirectionIndex, (unsigned long long) bitIndex
+  );
+  
   * zGc__finalmap( gc, ii ) |= ( 1llu << bitIndex ) ;
 }
 
@@ -240,7 +258,12 @@ zGc__finalmap__unmark(
   struct zII   ii
 ){
   uint64_t bitIndex = ii.indirectionIndex % 64 ;
-  * zGc__finalmap( gc, ii ) &= ~ ( 1llu << bitIndex ) ;
+  
+  zGc__warn(
+    "unmarking ii:%llu bitIndex:%llu\n", (unsigned long long) ii.indirectionIndex, (unsigned long long) bitIndex
+  );
+  
+* zGc__finalmap( gc, ii ) &= ~ ( 1llu << bitIndex ) ;
 }
 
 static inline
@@ -251,12 +274,12 @@ zGc__finalmap__marked(
 ){
   uint64_t bitIndex = ii.indirectionIndex % 64 ;
   
-  // zGc__warn(
-  //   "II[%llu] bit:0x%llx value:0x%llx",
-  //   (unsigned long long) ii.indirectionIndex,
-  //   (unsigned long long) bitIndex,
-  //   (unsigned long long) * zGc__finalmap( gc, ii )
-  // );
+  zGc__warn(
+    "II[%llu] bit:0x%llx value:0x%llx",
+    (unsigned long long) ii.indirectionIndex,
+    (unsigned long long) bitIndex,
+    (unsigned long long) * zGc__finalmap( gc, ii )
+  );
   
   return !! ( (* zGc__finalmap( gc, ii )) & ( 1llu << bitIndex ) );
 }
@@ -281,10 +304,10 @@ zGc__num_objects(
 }
 
 static inline
-uint64_t
+uint32_t
 zGc__slots_needed_for_collection_livemaps(
   struct zGc * gc         ,
-  uint64_t     numObjects
+  uint32_t     numObjects
 ){
   zUNUSED( gc );
   // we only use 1 bit per object to track liveness
@@ -293,10 +316,10 @@ zGc__slots_needed_for_collection_livemaps(
 }
 
 static inline
-uint64_t
+uint32_t
 zGc__slots_needed_for_collection_rewrites(
   struct zGc * gc         ,
-  uint64_t     numObjects
+  uint32_t     numObjects
 ){
   zUNUSED( gc );
   uint64_t requiredSpace = numObjects * sizeof( struct zII ) ;
@@ -308,15 +331,30 @@ zGc__slots_needed_for_collection_rewrites(
 }
 
 static inline
-uint64_t
+uint32_t
 zGc__slots_needed_for_collection(
   struct zGc * gc         ,
-  uint64_t     numObjects
+  uint32_t     numObjects
 ){
   zUNUSED( gc );
-  uint64_t livemapSpace = zGc__slots_needed_for_collection_livemaps( gc, numObjects );
-  uint64_t rewriteSpace = zGc__slots_needed_for_collection_rewrites( gc, numObjects );
+  uint32_t livemapSpace = zGc__slots_needed_for_collection_livemaps( gc, numObjects );
+  uint32_t rewriteSpace = zGc__slots_needed_for_collection_rewrites( gc, numObjects );
   return livemapSpace + rewriteSpace ;
+}
+
+static inline
+uint32_t
+zGc__slots_needed_for_collection_with_new(
+  struct zGc * gc         ,
+  uint32_t     numObjects
+){
+  // needed to account for every %64=0 slots being used as a finalmap
+  // 
+  if( numObjects % 64 == 0 ){
+    return zGc__slots_needed_for_collection( gc, numObjects + 2 );
+  } else {
+    return zGc__slots_needed_for_collection( gc, numObjects + 1 );
+  }
 }
 
 static inline
@@ -427,6 +465,8 @@ zGc__create(
   for( uint64_t index = 0; index < zNUM_REGISTERS ; index ++ ){
     zGc__set( gc, index, zRESERVED_NULL );
   }
+  
+  zGc__finalmap__zero( gc, (struct zII){ .indirectionIndex = 0 });
   
   return gc ;
 }
@@ -721,6 +761,8 @@ zGc__finalize(
   #define zPREFIX zINLIVE
   #define zCURRENT_II (ii)
   
+  zGc__warn( "finalize II[%llu] OT[%llu]", (unsigned long long) ii.indirectionIndex, (unsigned long long) zGc__indirection( gc, ii )->objectType.objectType );
+  
   static void * zInlineJumps [] = { && zINLIVEcFreeExit $CFREETARGETS } ;
   (void) zInlineJumps ;
   
@@ -734,6 +776,67 @@ zGc__finalize(
   zGc__finalmap__unmark( gc, ii );
   
   gc->finalizers ++ ;
+}
+
+static inline
+void
+zGc__collect__move_slot_data(
+  struct zGc *          gc                     ,
+  struct zIndirection * newIndirectionLocation ,
+  uint32_t *            nextNewSlot            ,
+  uint64_t *            slotShifts
+){
+  if( ! newIndirectionLocation->immediate && newIndirectionLocation->as_slotIndex.slotIndex != *nextNewSlot ){
+    char * destination = (char *) gc->slots[ *nextNewSlot ].as_chardata ;
+    char * source = (char *) gc->slots[ newIndirectionLocation->as_slotIndex.slotIndex ].as_chardata ;
+    
+    // a gc with no variable sized items will fail if these aren't ignorable
+    zUNUSED( destination );
+    zUNUSED( source );
+    
+    // 
+    // !!! TYPESHIFTS increment nextNewSlot from within the type specific inclusions
+    // !!! TYPESHIFTS increment slotShifts from within type specific inclusions
+    // 
+    
+    $TYPESHIFTTARGETS
+    
+    goto * typeShiftTargets[ newIndirectionLocation->objectType.objectType ] ;
+    $TYPESHIFTS
+    typeShiftExit:;
+  }
+}
+
+static inline
+void
+zGc__collect__update_references(
+  struct zGc *          gc                     ,
+  struct zII *          rewrites               ,
+  struct zIndirection * newIndirectionLocation ,
+  uint64_t *            referenceRewrites
+){
+  #define zTYPEWALK_PREFIX zREWRITE
+  
+  #define yield( ptr ) \
+    do{ \
+      (ptr)->indirectionIndex = rewrites[ (ptr)->indirectionIndex ].indirectionIndex ; \
+      referenceRewrites ++ ; \
+    } while( 0 )
+  
+  #define zCURRENT_II (zGc__ii( gc, newIndirectionLocation ).indirectionIndex)
+  
+  // type walk targets
+  // 
+  $TYPEWALKTARGETS
+  
+  // type walks
+  goto * zPASTEVALUE( zTYPEWALK_PREFIX, typeWalkTargets )[ newIndirectionLocation->objectType.objectType ];
+  $TYPEWALKS
+  zPASTEVALUE( zTYPEWALK_PREFIX, typeWalkExit ) :;
+  
+  #undef zCURRENT_II
+  #undef yield
+  #undef zTYPEWALK_PREFIX
 }
 
 static inline
@@ -757,6 +860,8 @@ zGc__collect__compact_objects_and_rewrite_references(
   ){
     if( livemap[ chunkIndex ] ){
       
+      zGc__warn( "hbb chunk:%llu", (unsigned long long) chunkIndex );
+      
       // we always skip bitIndex = 0, since that's where our finalmap chunks are located
       // we'll skip zOT_NULL as well, but who cares since it's static and needs nothing done
       // 
@@ -764,9 +869,10 @@ zGc__collect__compact_objects_and_rewrite_references(
       
       while( bitIndex < 64 ){
         
-        if( livemap[ chunkIndex ] & (1llu << bitIndex) ){
-          unsigned calculatedIndex = chunkIndex * 64 + bitIndex ;
-          struct zII sourceII = (struct zII){ .indirectionIndex = calculatedIndex };
+        unsigned calculatedIndex = chunkIndex * 64 + bitIndex ;
+        struct zII sourceII = (struct zII){ .indirectionIndex = calculatedIndex };
+        
+        if( zLM__marked( livemap, sourceII.indirectionIndex ) ){
           
           // move indirection
           
@@ -804,56 +910,32 @@ zGc__collect__compact_objects_and_rewrite_references(
           
           // move slotdata
           
-          if( ! newIndirectionLocation->immediate && newIndirectionLocation->as_slotIndex.slotIndex != nextNewSlot ){
-            char * destination = (char *) gc->slots[ nextNewSlot ].as_chardata ;
-            char * source = (char *) gc->slots[ newIndirectionLocation->as_slotIndex.slotIndex ].as_chardata ;
-            
-            // a gc with no variable sized items will fail if these aren't ignorable
-            zUNUSED( destination );
-            zUNUSED( source );
-            
-            // 
-            // !!! TYPESHIFTS increment nextNewSlot from within the type specific inclusions
-            // !!! TYPESHIFTS increment slotShifts from within type specific inclusions
-            // 
-            
-            $TYPESHIFTTARGETS
-            
-            goto * typeShiftTargets[ newIndirectionLocation->objectType.objectType ] ;
-            $TYPESHIFTS
-            typeShiftExit:;
-            
+          if(
+            (! newIndirectionLocation->immediate)
+            &&
+            ( newIndirectionLocation->as_slotIndex.slotIndex != nextNewSlot )
+          ){
+            zGc__collect__move_slot_data(
+              gc                     ,
+              newIndirectionLocation ,
+              & nextNewSlot          ,
+              slotShifts
+            );
           }
           
           // update references
           
-          #define zTYPEWALK_PREFIX zREWRITE
-          
-          #define yield( ptr ) \
-            do{ \
-              (ptr)->indirectionIndex = rewrites[ (ptr)->indirectionIndex ].indirectionIndex ; \
-              referenceRewrites ++ ; \
-            } while( 0 )
-          
-          #define zCURRENT_II (zGc__ii( gc, newIndirectionLocation ).indirectionIndex)
-          
-          // type walk targets
-          // 
-          $TYPEWALKTARGETS
-          
-          // type walks
-          goto * zPASTEVALUE( zTYPEWALK_PREFIX, typeWalkTargets )[ newIndirectionLocation->objectType.objectType ];
-          $TYPEWALKS
-          zPASTEVALUE( zTYPEWALK_PREFIX, typeWalkExit ) :;
-          
-          #undef zCURRENT_II
-          #undef yield
-          #undef zTYPEWALK_PREFIX
+          zGc__collect__update_references(
+            gc                     ,
+            rewrites               ,
+            newIndirectionLocation ,
+            referenceRewrites
+          );
           
           // </if livemap[ chunkindex ]>
           
-        } else if( zGc__finalmap__marked( gc, (struct zII){ .indirectionIndex = chunkIndex * 64 + bitIndex } ) ){
-          zGc__finalize( gc, (struct zII){ .indirectionIndex = chunkIndex * 64 + bitIndex } );
+        } else if( zGc__finalmap__marked( gc, sourceII ) ){
+          zGc__finalize( gc, sourceII );
         }
         
         bitIndex ++ ;
@@ -864,14 +946,15 @@ zGc__collect__compact_objects_and_rewrite_references(
       // on them before we're done with them
       // 
       
+      zGc__warn( "hmm" );
+      
       // 1 to skip the finalmap entry at 0
-      uint32_t bitIndex = 1 ;
+      uint32_t bitIndex = 1llu ;
       while( bitIndex < 64 ){
         struct zII target = (struct zII){ .indirectionIndex = chunkIndex * 64 + bitIndex } ;
         
         if( zGc__finalmap__marked( gc, target ) ){
           zGc__finalize( gc, target );          
-          gc->finalizers ++ ;
         }
         
         bitIndex ++ ;
@@ -883,7 +966,6 @@ zGc__collect__compact_objects_and_rewrite_references(
   
   return nextNewSlot ; 
 }
-
 
 static inline
 void

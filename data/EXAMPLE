@@ -20,7 +20,11 @@ cfree : free( *this );
 name  : uint64
 ctype : uint64_t
 cinit : * this = 0 ;
-cwalk : (*this)++;
+
+name  : uint32
+ctype : uint32_t
+cinit : * this = 0 ;
+
 
 name  : TinyString1
 ctype : struct { char data [1] ; }

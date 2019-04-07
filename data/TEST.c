@@ -9,7 +9,7 @@ int main(
   zUNUSED( argc );
   zUNUSED( argv );
   
-  struct zGc * gc = zGc__create( 2000000000 );
+  struct zGc * gc = zGc__create( 2000000 );
   if( ! gc ){
     printf( "failed to allocate a new gc\n" );
   }
@@ -26,7 +26,7 @@ int main(
   
   for(
     uint64_t wat = 0    ;
-    wat < 10llu ;
+    wat < 1000000llu ;
     wat ++
   ){
     // char * ss = 
@@ -57,13 +57,11 @@ int main(
     // zGc__set( gc, ri, newConsII );
     // zGc__set( gc, (ri + 1) % 20, zRESERVED_NULL );
     
-    for( uint64_t jj = 0; jj < 100000000; jj++ ){
-      zGc__new_Noise( gc );
-    }
-    
-    zGc__collect( gc );
-    
+    //zGc__new_Noise( gc );
+    zGc__new_uint32( gc );
   }
+  
+  zGc__collect( gc );
   
   fprintf( stderr, "done\n" );
   zGc__stats( gc );
