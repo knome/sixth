@@ -48,6 +48,7 @@ TEMPLATE = r"""
 
 // abort on panic vs mere exit
 #define zABORT 0
+#define zWARNS 0
 
 #define zMINSLOTS         5
 #define zNUM_REGISTERS    $NUMREGISTERS
@@ -75,8 +76,14 @@ TEMPLATE = r"""
     exit( 1 );                                                                               \
   } while(0);
 
-#define zGc__warn( pattern, ... ) do {                                                       \
-    fprintf( stderr, "WARN @ %s:%d :: " pattern "\n", __FILE__, __LINE__, ## __VA_ARGS__ ); \
+#define zGc__warn( pattern, ... ) do {                                                        \
+    if( zWARNS ){                                                                             \
+      fprintf( stderr, "WARN @ %s:%d :: " pattern "\n", __FILE__, __LINE__, ## __VA_ARGS__ ); \
+    }                                                                                         \
+  } while(0);
+
+#define zGc__log( pattern, ... ) do { \
+    fprintf( stderr, "LOG @ %s:%d :: " pattern "\n", __FILE__, __LINE__, ## __VA_ARGS__ ); \
   } while(0);
 
 struct zOT { uint16_t objectType ; };
@@ -344,17 +351,10 @@ zGc__slots_needed_for_collection(
 
 static inline
 uint32_t
-zGc__slots_needed_for_collection_with_new(
-  struct zGc * gc         ,
-  uint32_t     numObjects
+zGc__indirections_required_for_new(
+  struct zGc * gc
 ){
-  // needed to account for every %64=0 slots being used as a finalmap
-  // 
-  if( numObjects % 64 == 0 ){
-    return zGc__slots_needed_for_collection( gc, numObjects + 2 );
-  } else {
-    return zGc__slots_needed_for_collection( gc, numObjects + 1 );
-  }
+  return 1 + !! ( gc->nextII.indirectionIndex % 64 == 0 ) ;
 }
 
 static inline
@@ -389,24 +389,24 @@ void
 zGc__stats(
   struct zGc * gc
 ){
-  zGc__warn( "zgc::registers = %" PRIu32, zNUM_REGISTERS );
-  zGc__warn( "zgc::slots     = %" PRIu64, gc->numSlots ) ;
-  zGc__warn( "zgc::nextII    = II[%" PRIu32 "]", gc->nextII.indirectionIndex );
-  zGc__warn( "zgc::nextSI    = SI[%" PRIu32 "]", gc->nextSI.slotIndex );
-  zGc__warn( "" );
+  zGc__log( "zgc::registers = %" PRIu32, zNUM_REGISTERS );
+  zGc__log( "zgc::slots     = %" PRIu64, gc->numSlots ) ;
+  zGc__log( "zgc::nextII    = II[%" PRIu32 "]", gc->nextII.indirectionIndex );
+  zGc__log( "zgc::nextSI    = SI[%" PRIu32 "]", gc->nextSI.slotIndex );
+  zGc__log( "" );
   
-  zGc__warn( "zgc::collections           = %" PRIu64 "", gc->collections           );
-  zGc__warn( "zgc::allocations           = %" PRIu64 "", gc->allocations           );
-  zGc__warn( "zgc::bytesAllocated        = %" PRIu64 "", gc->bytesAllocated        );
-  zGc__warn( "zgc::indirectionsAllocated = %" PRIu64 "", gc->indirectionsAllocated );
-  zGc__warn( "zgc::slotsAllocated        = %" PRIu64 "", gc->slotsAllocated        );
+  zGc__log( "zgc::collections           = %" PRIu64 "", gc->collections           );
+  zGc__log( "zgc::allocations           = %" PRIu64 "", gc->allocations           );
+  zGc__log( "zgc::bytesAllocated        = %" PRIu64 "", gc->bytesAllocated        );
+  zGc__log( "zgc::indirectionsAllocated = %" PRIu64 "", gc->indirectionsAllocated );
+  zGc__log( "zgc::slotsAllocated        = %" PRIu64 "", gc->slotsAllocated        );
   
-  zGc__warn( "zgc::indirectionShifts     = %" PRIu64 "", gc->indirectionShifts     );
-  zGc__warn( "zgc::slotShifts            = %" PRIu64 "", gc->slotShifts            );
-  zGc__warn( "zgc::referenceRewrites     = %" PRIu64 "", gc->referenceRewrites     );
-  zGc__warn( "zgc::finalizersCalled      = %" PRIu64 "", gc->finalizers            );
+  zGc__log( "zgc::indirectionShifts     = %" PRIu64 "", gc->indirectionShifts     );
+  zGc__log( "zgc::slotShifts            = %" PRIu64 "", gc->slotShifts            );
+  zGc__log( "zgc::referenceRewrites     = %" PRIu64 "", gc->referenceRewrites     );
+  zGc__log( "zgc::finalizersCalled      = %" PRIu64 "", gc->finalizers            );
   
-  zGc__warn( "" );
+  zGc__log( "" );
 }
 
 static inline
@@ -899,13 +899,15 @@ zGc__collect__compact_objects_and_rewrite_references(
             * newIndirectionLocation = * oldIndirectionLocation ;
             indirectionShifts ++ ;
             
-            zGc__finalmap__unmark( gc, sourceII );
-            zGc__finalmap__mark(
-              gc,
-              (struct zII){
-                .indirectionIndex = rewrites[ sourceII.indirectionIndex ].indirectionIndex
-              }
-            );
+            if( zGc__finalmap__marked( gc, sourceII ) ){
+              zGc__finalmap__unmark( gc, sourceII );
+              zGc__finalmap__mark(
+                gc,
+                (struct zII){
+                  .indirectionIndex = rewrites[ sourceII.indirectionIndex ].indirectionIndex
+                }
+              );
+            }
           }
           
           // move slotdata
@@ -1116,6 +1118,31 @@ zGc__collect(
 }
 
 static inline
+int
+zGc__has_sufficient_space_for_allocation(
+  struct zGc * gc            ,
+  uint32_t     requiredSlots
+){
+  uint64_t availableSlots =
+    gc->numSlots
+    - gc->nextII.indirectionIndex
+    - gc->nextSI.slotIndex 
+    ;
+  
+  uint64_t requiredIndirections =
+    zGc__indirections_required_for_new( gc )
+    ;
+  
+  uint64_t collectSlots =
+    zGc__slots_needed_for_collection(
+      gc                                                 ,
+      gc->nextII.indirectionIndex + requiredIndirections 
+    );
+  
+  return requiredIndirections + requiredSlots + collectSlots <= availableSlots ;
+}
+
+static inline
 struct zII
 zGc__new(
   struct zGc * gc            ,
@@ -1124,7 +1151,6 @@ zGc__new(
 ){
   uint64_t immediateBytes = sizeof( ((struct zIndirection){0}).as_immediateData ) ;
   
-  uint64_t requiredIndirections = 1 ;
   uint64_t isImmediate = requiredSpace <= immediateBytes ;
   uint64_t requiredSlots =
     isImmediate
@@ -1132,35 +1158,12 @@ zGc__new(
     : (requiredSpace / zSLOT_SIZE + ( !! (requiredSpace % zSLOT_SIZE) ) )
     ;
   
-  gc->bytesAllocated += requiredSpace ;
-  
-  uint64_t availableSlots =
-    gc->numSlots
-    - gc->nextII.indirectionIndex
-    - gc->nextSI.slotIndex 
-    ;
-  
-  uint64_t collectSlots = zGc__slots_needed_for_collection( gc, 1 + gc->nextII.indirectionIndex );
-  
-  // zGc__warn(
-  //   "availableSlots : %llu requiredSlots : %llu",
-  //   (unsigned long long) availableSlots,
-  //   (unsigned long long) (requiredIndirections + requiredSlots + collectSlots )
-  // );
-  
-  if( requiredIndirections + requiredSlots + collectSlots > availableSlots ){
+  if( zUNLIKELY( ! zGc__has_sufficient_space_for_allocation( gc, requiredSlots ) ) ){
     zGc__collect( gc );
     
-    uint64_t newAvailableSlots =
-      gc->numSlots
-      - gc->nextII.indirectionIndex
-      - gc->nextSI.slotIndex
-      ;
-    
-    if( zUNLIKELY( requiredIndirections + requiredSlots + collectSlots > newAvailableSlots ) ){
+    if( zUNLIKELY( ! zGc__has_sufficient_space_for_allocation( gc, requiredSlots ) ) ){
       zGc__panic( "could not free sufficient space for requested allocation during gc collection" );
     }
-    
   }
   
   struct zII newII = 
@@ -1182,8 +1185,6 @@ zGc__new(
     zGc__finalmap__mark( gc, newII );
   }
   
-  gc->indirectionsAllocated += 1 ;
-  
   if( isImmediate ){
     memset( indirection->as_immediateData, 0, sizeof( indirection->as_immediateData ) );
   } else {
@@ -1192,6 +1193,8 @@ zGc__new(
     gc->slotsAllocated += requiredSlots ;
   }
   
+  gc->bytesAllocated        += requiredSpace ;
+  gc->indirectionsAllocated += 1 ; // don't count finalmaps
   gc->allocations ++ ;
   
   return newII ;
