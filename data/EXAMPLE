@@ -68,3 +68,9 @@ name  : Noise
 ctype : int
 cinit : * this = 0 ;
 cfree : {}
+
+name  : Canary
+ctype : int
+cinit : * this = 0 ;
+cwalk : * this = 1 ;
+

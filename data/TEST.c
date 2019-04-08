@@ -9,7 +9,7 @@ int main(
   zUNUSED( argc );
   zUNUSED( argv );
   
-  struct zGc * gc = zGc__create( 2000000 );
+  struct zGc * gc = zGc__create( 2000000000 );
   if( ! gc ){
     printf( "failed to allocate a new gc\n" );
   }
@@ -26,7 +26,7 @@ int main(
   
   for(
     uint64_t wat = 0    ;
-    wat < 1000000000llu ;
+    wat < 10000000000llu ;
     wat ++
   ){
     // char * ss = 
@@ -35,7 +35,7 @@ int main(
     //   " you'd be getting fired out of a cannon towards a space station by now. This is only a test" 
     // ;
     // struct zII newStringII = zGc__new_SmallString( gc, strlen( ss ), ss );
-    // struct zII newStringII = zGc__new_String( gc, 500000, data );
+    // struct zII newStringII = zGc__new_String( gc, strlen( ss ), ss );
     // (void) newStringII ;
     // zGc__set( gc, wat % 4, newStringII );
     
@@ -57,8 +57,11 @@ int main(
     // zGc__set( gc, ri, newConsII );
     // zGc__set( gc, (ri + 1) % 20, zRESERVED_NULL );
     
-    //zGc__new_Noise( gc );
-    zGc__new_uint32( gc );
+    // zGc__new_Noise( gc );
+    // zGc__new_uint32( gc );
+    
+    struct zII ii = zGc__new_Canary( gc );
+    zGc__set( gc, wat % 20, ii );
   }
   
   zGc__collect( gc );

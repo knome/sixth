@@ -45,6 +45,7 @@ TEMPLATE = r"""
 #include <errno.h>
 #include <string.h>
 #include <inttypes.h>
+#include <time.h>
 
 // abort on panic vs mere exit
 #define zABORT 0
@@ -167,6 +168,10 @@ struct zGc {
   uint64_t referenceRewrites     ;
   uint64_t slotShifts            ;
   uint64_t finalizers            ;
+  
+  // time kept in nanoseconds
+  uint64_t longestGc ;
+  uint64_t sumGc     ;
   
   union zSlot slots [] ; // gc'd data
 };
@@ -406,6 +411,10 @@ zGc__stats(
   zGc__log( "zgc::referenceRewrites     = %" PRIu64 "", gc->referenceRewrites     );
   zGc__log( "zgc::finalizersCalled      = %" PRIu64 "", gc->finalizers            );
   
+  zGc__log( "zgc::longestGc             = %" PRIu64 "", gc->longestGc                          );
+  zGc__log( "zgc::sumGc                 = %" PRIu64 "", gc->sumGc                              );
+  zGc__log( "zgc::averageGc             = %" PRIu64 "", ( gc->sumGc / (gc->collections ? gc->collections : 1) ) );
+  
   zGc__log( "" );
 }
 
@@ -456,6 +465,9 @@ zGc__create(
   gc->referenceRewrites     = 0 ;
   gc->slotShifts            = 0 ;
   gc->finalizers            = 0 ;
+  
+  gc->longestGc = 0 ;
+  gc->sumGc     = 0 ;
   
   for( uint64_t index = 0; index < (zNUM_UNIQUE_TYPES + 1) ; index ++ ){
     struct zIndirection * indirection = zGc__indirection( gc, (struct zII){ .indirectionIndex = index });
@@ -758,10 +770,14 @@ zGc__finalize(
   struct zGc * gc ,
   struct zII   ii
 ){
+  // zGc__warn(
+  //   "finalize II[%llu] OT[%llu]",
+  //   (unsigned long long) ii.indirectionIndex,
+  //   (unsigned long long) zGc__indirection( gc, ii )->objectType.objectType
+  // );
+  
   #define zPREFIX zINLIVE
   #define zCURRENT_II (ii)
-  
-  zGc__warn( "finalize II[%llu] OT[%llu]", (unsigned long long) ii.indirectionIndex, (unsigned long long) zGc__indirection( gc, ii )->objectType.objectType );
   
   static void * zInlineJumps [] = { && zINLIVEcFreeExit $CFREETARGETS } ;
   (void) zInlineJumps ;
@@ -970,6 +986,16 @@ zGc__collect__compact_objects_and_rewrite_references(
 }
 
 static inline
+uint64_t
+zGc__now(
+  void
+){
+  struct timespec spec ;
+  clock_gettime( CLOCK_MONOTONIC, & spec );
+  return (uint64_t) (spec.tv_sec) * 1000000000llu + (uint64_t) (spec.tv_nsec) ;
+}
+
+static inline
 void
 zGc__collect(
   struct zGc * gc
@@ -1000,6 +1026,8 @@ zGc__collect(
   // zGc__stats( gc );
   // zGc__registers( gc );
   // zGc__dump( gc );
+  
+  uint64_t start = zGc__now();
   
   uint64_t livemapSlots = zGc__slots_needed_for_collection_livemaps( gc, gc->nextII.indirectionIndex );
   uint64_t rewriteSlots = zGc__slots_needed_for_collection_rewrites( gc, gc->nextII.indirectionIndex );
@@ -1100,6 +1128,12 @@ zGc__collect(
         ;
     }
   }
+  
+  uint64_t stop = zGc__now();
+  uint64_t total = stop - start ;
+  
+  gc->sumGc += total ;
+  gc->longestGc = total > gc->longestGc ? total : gc->longestGc ;
   
   gc->indirectionShifts += indirectionShifts ;
   gc->slotShifts        += slotShifts        ;
